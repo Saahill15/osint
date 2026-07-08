@@ -190,6 +190,48 @@ function sendAuthState(res, token) {
   });
 }
 
+function applySecurityHeaders(res, { isApi = false } = {}) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=()');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://paid.originalapis.workers.dev");
+
+  if (isApi) {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }
+}
+
+function getAllowedOrigin(req) {
+  const origin = req.headers.origin;
+  const allowedOrigins = new Set([
+    ALLOWED_ORIGIN,
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+  ]);
+
+  if (!origin) {
+    return ALLOWED_ORIGIN;
+  }
+
+  return allowedOrigins.has(origin) ? origin : null;
+}
+
+function applyCorsHeaders(req, res) {
+  const allowedOrigin = getAllowedOrigin(req);
+
+  if (allowedOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  }
+}
+
 function sendJson(res, status, payload) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(payload));
@@ -286,22 +328,18 @@ async function saveSearchToSheet({ query, result, status, responseStatus, phase 
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const isApiRequest = url.pathname.startsWith('/api');
+
+  applySecurityHeaders(res, { isApi: isApiRequest });
 
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
-      'Access-Control-Allow-Credentials': 'true',
-      'Access-Control-Allow-Headers': 'Content-Type',
-      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    });
+    applyCorsHeaders(req, res);
+    res.writeHead(204);
     res.end();
     return;
   }
 
-  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  applyCorsHeaders(req, res);
 
   if (req.method === 'GET' && url.pathname === '/') {
     if (fs.existsSync(path.join(DIST_DIR, 'index.html'))) {

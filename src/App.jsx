@@ -24,7 +24,6 @@ function App() {
   const [sessionNow, setSessionNow] = useState(Date.now());
   const [isSessionChecking, setIsSessionChecking] = useState(true);
   const [sessionMessage, setSessionMessage] = useState('');
-  const [sessionToken, setSessionToken] = useState('');
 
   function resetState() {
     setRc('');
@@ -36,7 +35,6 @@ function App() {
   function clearSessionState({ showMessage = false, message = '' } = {}) {
     setVerified(false);
     setSessionExpiresAt(null);
-    setSessionToken('');
     setRc('');
     setStatus('');
     setResult('');
@@ -141,7 +139,6 @@ function App() {
       if (response.ok && data.ok) {
         setVerified(true);
         setSessionExpiresAt(data.expiresAt || null);
-        setSessionToken(data.token || '');
         setAccessError('');
         setSessionMessage('');
       } else {
@@ -188,7 +185,6 @@ function App() {
     try {
       const response = await fetch(`${API_BASE}/lookup?rc=${encodeURIComponent(queryText)}`, {
         credentials: 'include',
-        headers: sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {},
       });
       const data = await response.json();
       setStatus(response.ok ? 'Analysis complete.' : 'Request issue.');
