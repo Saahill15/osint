@@ -159,8 +159,31 @@ function clearAccessCookieParts() {
   return cookieParts;
 }
 
+function normalizeIp(value) {
+  if (!value || typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const candidate = trimmed.split(',')[0].trim();
+  if (!candidate) {
+    return null;
+  }
+
+  return candidate.replace(/^::ffff:/, '');
+}
+
 function getClientKey(req) {
-  return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown');
+  const forwardedIp = normalizeIp(req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.headers['cf-connecting-ip']);
+  if (forwardedIp) {
+    return forwardedIp;
+  }
+
+  return normalizeIp(req.socket.remoteAddress) || 'unknown';
 }
 
 function getVerifyBucket(req) {
