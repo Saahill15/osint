@@ -221,6 +221,18 @@ function isVerifyRateLimited(req) {
   return bucket.count >= BRUTE_FORCE_MAX_ATTEMPTS;
 }
 
+function getLockoutMessage(req) {
+  const bucket = getVerifyBucket(req);
+
+  if (!bucket.blocked || !bucket.lockedUntil) {
+    return null;
+  }
+
+  const remainingMs = Math.max(0, bucket.lockedUntil - Date.now());
+  const remainingMinutes = Math.ceil(remainingMs / 60000);
+  return `Too many failed attempts. Please wait ${remainingMinutes} minute${remainingMinutes === 1 ? '' : 's'} and try again.`;
+}
+
 function sendAuthState(res, token) {
   const payload = parseAccessToken(token);
 
@@ -406,7 +418,8 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/api/verify') {
     try {
       if (isVerifyRateLimited(req)) {
-        sendJson(res, 429, { ok: false, error: 'Too many attempts. Try again later.' });
+        const lockoutMessage = getLockoutMessage(req);
+        sendJson(res, 429, { ok: false, error: lockoutMessage || 'Too many attempts. Try again later.' });
         return;
       }
 

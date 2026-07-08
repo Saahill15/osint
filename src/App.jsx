@@ -142,7 +142,8 @@ function App() {
         setAccessError('');
         setSessionMessage('');
       } else {
-        setAccessError(data.error || 'Incorrect access code. Please try again.');
+        const message = data.error || 'Incorrect access code. Please try again.';
+        setAccessError(message);
         setAccessCode('');
       }
     } catch (error) {
