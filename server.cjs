@@ -1,11 +1,25 @@
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 
 const ACCESS_CODE = process.env.ACCESS_CODE || process.env.VITE_ACCESS_CODE || '';
 const LOOKUP_KEY = process.env.LOOKUP_KEY || process.env.VITE_LOOKUP_KEY || '';
 const PORT = Number(process.env.PORT || 3015);
 const SHEETS_WEBHOOK_URL = process.env.GOOGLE_SHEETS_WEBHOOK_URL || process.env.SHEETS_WEBHOOK_URL || '';
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'http://localhost:3000';
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || process.env.RENDER_EXTERNAL_URL || process.env.RENDER_URL || 'http://localhost:3000';
+const DIST_DIR = path.join(__dirname, 'dist');
+const MIME_TYPES = {
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.ico': 'image/x-icon',
+};
 const COOKIE_SECURE = String(process.env.COOKIE_SECURE || '').toLowerCase() === 'true';
 const TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET || process.env.SESSION_SECRET || ACCESS_CODE || 'development-secret';
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 1000 * 60 * 5);
@@ -181,6 +195,47 @@ function sendJson(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function getContentType(filePath) {
+  return MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+}
+
+function sendFile(res, filePath, statusCode = 200) {
+  fs.readFile(filePath, (error, data) => {
+    if (error) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'Not found.' }));
+      return;
+    }
+
+    res.writeHead(statusCode, { 'Content-Type': getContentType(filePath) });
+    res.end(data);
+  });
+}
+
+function serveStatic(req, res, url) {
+  if (req.method !== 'GET' || url.pathname.startsWith('/api')) {
+    return false;
+  }
+
+  const pathname = decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname);
+  const relativePath = pathname.replace(/^\/+/, '') || 'index.html';
+  const requestedFile = path.resolve(DIST_DIR, relativePath);
+  const indexFile = path.resolve(DIST_DIR, 'index.html');
+
+  if (!requestedFile.startsWith(DIST_DIR)) {
+    sendFile(res, indexFile);
+    return true;
+  }
+
+  if (fs.existsSync(requestedFile) && fs.statSync(requestedFile).isFile()) {
+    sendFile(res, requestedFile);
+  } else {
+    sendFile(res, indexFile);
+  }
+
+  return true;
+}
+
 function getIstTimestamp(date = new Date()) {
   return new Intl.DateTimeFormat('en-IN', {
     timeZone: 'Asia/Kolkata',
@@ -249,6 +304,11 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
 
   if (req.method === 'GET' && url.pathname === '/') {
+    if (fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
+      sendFile(res, path.join(DIST_DIR, 'index.html'));
+      return;
+    }
+
     sendJson(res, 200, { ok: true, message: 'OSINT backend is running.' });
     return;
   }
@@ -372,6 +432,10 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 502, { ok: false, error: 'Lookup failed.' });
     }
 
+    return;
+  }
+
+  if (serveStatic(req, res, url)) {
     return;
   }
 

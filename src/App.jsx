@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-const API_BASE = 'https://osint-backend-o7zj.onrender.com/api';
+const API_BASE = '/api';
 
 function formatDuration(milliseconds) {
   const safeMilliseconds = Math.max(0, milliseconds);
