@@ -231,8 +231,8 @@ function App() {
       <div className="card">
         <div className="card-header">
           <div>
-            <p className="eyebrow">Vehicle Details</p>
-            <h1>Find vehicle records</h1>
+            <p className="eyebrow">OSINT Workspace</p>
+            <h1>Find intelligence leads</h1>
             {sessionExpiresAt ? (
               <p className="gate-text" style={{ marginTop: '0.75rem' }}>
                 Session active for {formatDuration(sessionExpiresAt - sessionNow)} more.
@@ -288,7 +288,7 @@ function App() {
             <pre>{result}</pre>
           </div>
         ) : (
-          !isLoading && <div className="empty-state">Vehicle details will appear here.</div>
+          !isLoading && <div className="empty-state">OSINT results will appear here.</div>
         )}
       </div>
 
