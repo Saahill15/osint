@@ -25,6 +25,10 @@ const TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET || process.env.SESSION_SECR
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 1000 * 60 * 5);
 const VERIFY_LIMIT_WINDOW_MS = Number(process.env.VERIFY_LIMIT_WINDOW_MS || 60 * 1000);
 const VERIFY_LIMIT_MAX = Number(process.env.VERIFY_LIMIT_MAX || 5);
+const VERIFY_LOCKOUT_MS = Number(process.env.VERIFY_LOCKOUT_MS || 1000 * 60 * 5);
+const BRUTE_FORCE_MAX_ATTEMPTS = Number(process.env.BRUTE_FORCE_MAX_ATTEMPTS || VERIFY_LIMIT_MAX);
+const BRUTE_FORCE_WINDOW_MS = Number(process.env.BRUTE_FORCE_WINDOW_MS || VERIFY_LIMIT_WINDOW_MS);
+const BRUTE_FORCE_LOCKOUT_MS = Number(process.env.BRUTE_FORCE_LOCKOUT_MS || VERIFY_LOCKOUT_MS);
 
 const verifyAttempts = new Map();
 
@@ -159,20 +163,62 @@ function getClientKey(req) {
   return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown');
 }
 
-function isVerifyRateLimited(req) {
+function getVerifyBucket(req) {
   const clientKey = getClientKey(req);
   const now = Date.now();
-  const entry = verifyAttempts.get(clientKey) || { windowStart: now, count: 0 };
+  const entry = verifyAttempts.get(clientKey) || { windowStart: now, count: 0, lockedUntil: 0 };
 
-  if (now - entry.windowStart > VERIFY_LIMIT_WINDOW_MS) {
+  if (now - entry.windowStart > BRUTE_FORCE_WINDOW_MS) {
     entry.windowStart = now;
     entry.count = 0;
   }
 
-  entry.count += 1;
-  verifyAttempts.set(clientKey, entry);
+  if (entry.lockedUntil && now < entry.lockedUntil) {
+    return { ...entry, blocked: true };
+  }
 
-  return entry.count > VERIFY_LIMIT_MAX;
+  if (entry.lockedUntil && now >= entry.lockedUntil) {
+    entry.lockedUntil = 0;
+  }
+
+  return { ...entry, blocked: false };
+}
+
+function recordVerifyAttempt(req, wasSuccessful) {
+  const clientKey = getClientKey(req);
+  const now = Date.now();
+  const entry = verifyAttempts.get(clientKey) || { windowStart: now, count: 0, lockedUntil: 0 };
+
+  if (now - entry.windowStart > BRUTE_FORCE_WINDOW_MS) {
+    entry.windowStart = now;
+    entry.count = 0;
+  }
+
+  if (entry.lockedUntil && now < entry.lockedUntil) {
+    return;
+  }
+
+  if (wasSuccessful) {
+    entry.count = 0;
+    entry.lockedUntil = 0;
+  } else {
+    entry.count += 1;
+    if (entry.count >= BRUTE_FORCE_MAX_ATTEMPTS) {
+      entry.lockedUntil = now + BRUTE_FORCE_LOCKOUT_MS;
+      entry.count = 0;
+    }
+  }
+
+  verifyAttempts.set(clientKey, entry);
+}
+
+function isVerifyRateLimited(req) {
+  const bucket = getVerifyBucket(req);
+  if (bucket.blocked) {
+    return true;
+  }
+
+  return bucket.count >= BRUTE_FORCE_MAX_ATTEMPTS;
 }
 
 function sendAuthState(res, token) {
@@ -377,9 +423,12 @@ const server = http.createServer(async (req, res) => {
       const matches = timingSafeEqual(expectedBuffer, providedBuffer);
 
       if (!matches) {
+        recordVerifyAttempt(req, false);
         sendJson(res, 401, { ok: false, error: 'Incorrect access code.' });
         return;
       }
+
+      recordVerifyAttempt(req, true);
 
       const token = createAccessToken();
       const cookieParts = getAccessCookieParts(token, Math.max(1, Math.floor(SESSION_TTL_MS / 1000)));
