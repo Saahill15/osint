@@ -2,7 +2,6 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { fetchLookupWithRetry } = require('./lib/upstream.cjs');
 
 const ACCESS_CODE = process.env.ACCESS_CODE || process.env.VITE_ACCESS_CODE || '';
 const LOOKUP_KEY = process.env.LOOKUP_KEY || process.env.VITE_LOOKUP_KEY || '';
@@ -178,76 +177,38 @@ function normalizeIp(value) {
   return candidate.replace(/^::ffff:/, '');
 }
 
-function getClientCookieValue(req, cookieName) {
-  const cookieHeader = String(req.headers.cookie || '');
-  const cookie = cookieHeader.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${cookieName}=`));
-
-  if (!cookie) {
-    return null;
+function getClientKey(req) {
+  const forwardedIp = normalizeIp(req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.headers['cf-connecting-ip']);
+  if (forwardedIp) {
+    return forwardedIp;
   }
 
-  return decodeURIComponent(cookie.split('=').slice(1).join('='));
+  return normalizeIp(req.socket.remoteAddress) || 'unknown';
 }
 
-function attachClientCookie(res, clientId) {
-  const cookieParts = [`osint_verify_client=${encodeURIComponent(clientId)}`, 'HttpOnly', 'SameSite=Lax', 'Path=/'];
-
-  if (COOKIE_SECURE) {
-    cookieParts.push('Secure');
-  }
-
-  const existingCookies = res.getHeader('Set-Cookie');
-  const cookies = Array.isArray(existingCookies) ? [...existingCookies] : existingCookies ? [existingCookies] : [];
-
-  if (!cookies.includes(cookieParts.join('; '))) {
-    cookies.push(cookieParts.join('; '));
-  }
-
-  res.setHeader('Set-Cookie', cookies);
-}
-
-function getClientFingerprint(req, res) {
-  const userAgent = String(req.headers['user-agent'] || 'unknown');
-  const browserId = getClientCookieValue(req, 'osint_verify_client') || `browser-${crypto.randomBytes(6).toString('hex')}`;
-
-  if (!getClientCookieValue(req, 'osint_verify_client')) {
-    attachClientCookie(res, browserId);
-  }
-
-  const userAgentHash = crypto.createHash('sha256').update(userAgent).digest('hex').slice(0, 16);
-  return `${browserId}:${userAgentHash}`;
-}
-
-function getClientKey(req, res) {
-  return getClientFingerprint(req, res);
-}
-
-function getVerifyBucket(req, res) {
-  const clientKey = getClientKey(req, res);
+function getVerifyBucket(req) {
+  const clientKey = getClientKey(req);
   const now = Date.now();
   const entry = verifyAttempts.get(clientKey) || { windowStart: now, count: 0, lockedUntil: 0 };
-
-  if (entry.lockedUntil && now >= entry.lockedUntil) {
-    entry.lockedUntil = 0;
-    entry.count = 0;
-    verifyAttempts.set(clientKey, entry);
-  }
 
   if (now - entry.windowStart > BRUTE_FORCE_WINDOW_MS) {
     entry.windowStart = now;
     entry.count = 0;
-    verifyAttempts.set(clientKey, entry);
   }
 
   if (entry.lockedUntil && now < entry.lockedUntil) {
     return { ...entry, blocked: true };
   }
 
+  if (entry.lockedUntil && now >= entry.lockedUntil) {
+    entry.lockedUntil = 0;
+  }
+
   return { ...entry, blocked: false };
 }
 
-function recordVerifyAttempt(req, res, wasSuccessful) {
-  const clientKey = getClientKey(req, res);
+function recordVerifyAttempt(req, wasSuccessful) {
+  const clientKey = getClientKey(req);
   const now = Date.now();
   const entry = verifyAttempts.get(clientKey) || { windowStart: now, count: 0, lockedUntil: 0 };
 
@@ -279,21 +240,8 @@ function recordVerifyAttempt(req, res, wasSuccessful) {
   verifyAttempts.set(clientKey, entry);
 }
 
-function shouldBlockVerifyRequest(req, res) {
-  const bucket = getVerifyBucket(req, res);
-  if (bucket.blocked) {
-    return true;
-  }
-
-  if (bucket.count >= BRUTE_FORCE_MAX_ATTEMPTS) {
-    return true;
-  }
-
-  return false;
-}
-
-function isVerifyRateLimited(req, res) {
-  const bucket = getVerifyBucket(req, res);
+function isVerifyRateLimited(req) {
+  const bucket = getVerifyBucket(req);
   if (bucket.blocked) {
     return true;
   }
@@ -301,8 +249,8 @@ function isVerifyRateLimited(req, res) {
   return bucket.count >= BRUTE_FORCE_MAX_ATTEMPTS;
 }
 
-function getLockoutMessage(req, res) {
-  const bucket = getVerifyBucket(req, res);
+function getLockoutMessage(req) {
+  const bucket = getVerifyBucket(req);
 
   if (!bucket.blocked || !bucket.lockedUntil) {
     return null;
@@ -371,14 +319,7 @@ function applyCorsHeaders(req, res) {
 }
 
 function sendJson(res, status, payload) {
-  const headers = { 'Content-Type': 'application/json' };
-  const setCookie = res.getHeader('Set-Cookie');
-
-  if (setCookie) {
-    headers['Set-Cookie'] = setCookie;
-  }
-
-  res.writeHead(status, headers);
+  res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(payload));
 }
 
@@ -471,25 +412,6 @@ async function saveSearchToSheet({ query, result, status, responseStatus, phase 
   }
 }
 
-async function warmUpLookupService() {
-  if (!LOOKUP_KEY) {
-    return;
-  }
-
-  try {
-    await fetchLookupWithRetry({
-      lookupKey: LOOKUP_KEY,
-      vehicle: 'WARMUP',
-      baseUrl: 'https://paid.originalapis.workers.dev/deep',
-      maxAttempts: 1,
-      retryDelayMs: 200,
-      timeoutMs: 2000,
-    });
-  } catch (error) {
-    // Ignore warm-up failures; the real lookup path will retry.
-  }
-}
-
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const isApiRequest = url.pathname.startsWith('/api');
@@ -525,12 +447,11 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readJsonBody(req);
 
-      if (shouldBlockVerifyRequest(req, res)) {
-        const lockoutMessage = getLockoutMessage(req, res);
+      if (isVerifyRateLimited(req)) {
+        const lockoutMessage = getLockoutMessage(req);
         sendJson(res, 429, { ok: false, error: lockoutMessage || 'Too many attempts. Try again later.' });
         return;
       }
-
       const provided = String(body.code || '').trim();
 
       if (!ACCESS_CODE) {
@@ -543,30 +464,20 @@ const server = http.createServer(async (req, res) => {
       const matches = timingSafeEqual(expectedBuffer, providedBuffer);
 
       if (!matches) {
-        recordVerifyAttempt(req, res, false);
-        if (shouldBlockVerifyRequest(req, res)) {
-          const lockoutMessage = getLockoutMessage(req, res);
-          sendJson(res, 429, { ok: false, error: lockoutMessage || 'Too many attempts. Try again later.' });
-          return;
-        }
+        recordVerifyAttempt(req, false);
         sendJson(res, 401, { ok: false, error: 'Incorrect access code.' });
         return;
       }
 
-      recordVerifyAttempt(req, res, true);
+      recordVerifyAttempt(req, true);
 
       const token = createAccessToken();
       const cookieParts = getAccessCookieParts(token, Math.max(1, Math.floor(SESSION_TTL_MS / 1000)));
-      const existingCookies = res.getHeader('Set-Cookie');
-      const responseCookies = Array.isArray(existingCookies)
-        ? [...existingCookies]
-        : existingCookies
-          ? [existingCookies]
-          : [];
 
-      responseCookies.push(cookieParts.join('; '));
-      res.setHeader('Set-Cookie', responseCookies);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, {
+        'Set-Cookie': cookieParts.join('; '),
+        'Content-Type': 'application/json',
+      });
       res.end(JSON.stringify({ ok: true, expiresAt: Date.now() + SESSION_TTL_MS, sessionTtlMs: SESSION_TTL_MS }));
       return;
     } catch (error) {
@@ -605,50 +516,37 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      const upstream = await fetchLookupWithRetry({
-        lookupKey: LOOKUP_KEY,
-        vehicle,
-        baseUrl: 'https://paid.originalapis.workers.dev/deep',
-        maxAttempts: Number(process.env.LOOKUP_MAX_ATTEMPTS || 3),
-        retryDelayMs: Number(process.env.LOOKUP_RETRY_DELAY_MS || 800),
-        timeoutMs: Number(process.env.LOOKUP_TIMEOUT_MS || 5000),
-      });
+      const target = new URL('https://paid.originalapis.workers.dev/deep');
+      target.searchParams.set('key', LOOKUP_KEY);
+      target.searchParams.set('rc', vehicle);
 
-      if (!upstream.ok) {
-        saveSearchToSheet({
-          phase: 'failed',
-          query: vehicle,
-          result: {
-            ok: false,
+      const response = await fetch(target.toString());
+      const data = await response.json();
+      const sanitizedResult = response.ok
+        ? {
+            ok: true,
+            status: response.status,
             vehicleNumber: vehicle,
-            error: upstream.error,
-          },
-          status: 'error',
-          responseStatus: 502,
-        });
-        sendJson(res, 502, { ok: false, error: 'Lookup failed after retrying. Please try again in a moment.' });
-        return;
-      }
-
-      const data = upstream.data;
-      const sanitizedResult = {
-        ok: true,
-        status: 200,
-        vehicleNumber: vehicle,
-        summary: data?.result?.error || data?.result?.message || 'Lookup completed',
-        result: data,
-      };
-
-      saveSearchToSheet({
-        phase: 'completed',
+            summary: data?.result?.error || data?.result?.message || 'Lookup completed',
+            result: data,
+          }
+        : {
+            ok: false,
+            status: response.status,
+            vehicleNumber: vehicle,
+            error: data?.error || data?.result?.error || 'Lookup returned an error',
+            result: data,
+          };
+        saveSearchToSheet({
+        phase: response.ok ? 'completed' : 'finished-with-error',
         query: vehicle,
         result: sanitizedResult,
-        status: 'ok',
-        responseStatus: 200,
+        status: response.ok ? 'ok' : 'error',
+        responseStatus: response.status,
       });
-      sendJson(res, 200, data);
+      sendJson(res, response.ok ? 200 : response.status, data);
     } catch (error) {
-      saveSearchToSheet({
+        saveSearchToSheet({
         phase: 'failed',
         query: vehicle,
         result: {
@@ -674,8 +572,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Secure lookup server running on http://localhost:${PORT}`);
-
-  warmUpLookupService().catch(() => {});
 
   if (!SHEETS_WEBHOOK_URL) {
     console.warn('Google Sheets logging is disabled because GOOGLE_SHEETS_WEBHOOK_URL/SHEETS_WEBHOOK_URL is not set.');
