@@ -9,15 +9,20 @@
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  min-height: 100vh;
+  min-height: 100dvh;
   background: linear-gradient(135deg, #f7f9fc, #eef2f7);
 }
 
 button, input { font: inherit; }
-#root { min-height: 100vh; }
+#root {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
 
 .page-shell {
-  min-height: 100vh;
+  width: 100%;
+  min-height: 100dvh;
   padding: 24px;
   display: flex;
   align-items: center;
@@ -274,7 +279,8 @@ pre {
 @media (max-width: 640px) {
   .page-shell {
     padding: 12px;
-    align-items: stretch;
+    align-items: center;
+    justify-content: center;
   }
 
   .card {
@@ -285,6 +291,11 @@ pre {
   .card-header {
     flex-direction: column;
     align-items: flex-start;
+    gap: 8px;
+  }
+
+  .search-panel {
+    padding: 12px;
   }
 
   .search-row {
@@ -302,9 +313,20 @@ pre {
     min-height: 46px;
   }
 
+  .result-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
   .result-card,
   .empty-state {
     padding: 12px;
+  }
+
+  pre {
+    min-height: 140px;
+    font-size: 0.92rem;
   }
 }
 
