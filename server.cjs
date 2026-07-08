@@ -189,13 +189,18 @@ function recordVerifyAttempt(req, wasSuccessful) {
   const now = Date.now();
   const entry = verifyAttempts.get(clientKey) || { windowStart: now, count: 0, lockedUntil: 0 };
 
-  if (now - entry.windowStart > BRUTE_FORCE_WINDOW_MS) {
-    entry.windowStart = now;
+  if (entry.lockedUntil && now < entry.lockedUntil) {
+    return;
+  }
+
+  if (entry.lockedUntil && now >= entry.lockedUntil) {
+    entry.lockedUntil = 0;
     entry.count = 0;
   }
 
-  if (entry.lockedUntil && now < entry.lockedUntil) {
-    return;
+  if (now - entry.windowStart > BRUTE_FORCE_WINDOW_MS) {
+    entry.windowStart = now;
+    entry.count = 0;
   }
 
   if (wasSuccessful) {
@@ -417,13 +422,13 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/api/verify') {
     try {
+      const body = await readJsonBody(req);
+
       if (isVerifyRateLimited(req)) {
         const lockoutMessage = getLockoutMessage(req);
         sendJson(res, 429, { ok: false, error: lockoutMessage || 'Too many attempts. Try again later.' });
         return;
       }
-
-      const body = await readJsonBody(req);
       const provided = String(body.code || '').trim();
 
       if (!ACCESS_CODE) {
