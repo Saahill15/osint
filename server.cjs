@@ -444,4 +444,10 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Secure lookup server running on http://localhost:${PORT}`);
+
+  if (!SHEETS_WEBHOOK_URL) {
+    console.warn('Google Sheets logging is disabled because GOOGLE_SHEETS_WEBHOOK_URL/SHEETS_WEBHOOK_URL is not set.');
+  } else {
+    console.log('Google Sheets logging is enabled.');
+  }
 });

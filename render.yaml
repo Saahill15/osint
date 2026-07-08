@@ -10,6 +10,8 @@ services:
         value: S@OSINT*#
       - key: LOOKUP_KEY
         value: your_lookup_key_here
+      - key: GOOGLE_SHEETS_WEBHOOK_URL
+        value: your_google_sheets_webhook_url_here
       - key: ALLOWED_ORIGIN
         value: https://osint-app.onrender.com
       - key: COOKIE_SECURE
