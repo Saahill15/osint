@@ -11,6 +11,22 @@ function formatDuration(milliseconds) {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+function getOrCreateClientCookie() {
+  const cookieName = 'osint_verify_client';
+  const existingCookie = document.cookie
+    .split(';')
+    .map((chunk) => chunk.trim())
+    .find((chunk) => chunk.startsWith(`${cookieName}=`));
+
+  if (existingCookie) {
+    return decodeURIComponent(existingCookie.split('=').slice(1).join('='));
+  }
+
+  const clientId = `browser-${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)}`;
+  document.cookie = `${cookieName}=${encodeURIComponent(clientId)}; path=/; max-age=31536000; SameSite=Lax`;
+  return clientId;
+}
+
 function App() {
   const [rc, setRc] = useState('');
   const [status, setStatus] = useState('');
@@ -82,6 +98,8 @@ function App() {
         }
       }
     }
+
+    getOrCreateClientCookie();
 
     window.addEventListener('scroll', handleScroll);
     loadSession();
