@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: osint-app
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: ACCESS_CODE
+        value: S@OSINT*#
+      - key: LOOKUP_KEY
+        value: your_lookup_key_here
+      - key: ALLOWED_ORIGIN
+        value: https://osint-app.onrender.com
+      - key: COOKIE_SECURE
+        value: true
+      - key: ACCESS_TOKEN_SECRET
+        value: osint-secret-2026-strong-key
